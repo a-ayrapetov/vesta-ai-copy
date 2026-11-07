@@ -7,6 +7,7 @@ import {
   timestamp,
   boolean,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -24,16 +25,29 @@ export const insertUserSchema = createInsertSchema(users).pick({
 });
 
 // Chat history
-export const chatHistories = pgTable("chat_histories", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").references(() => users.id),
-  messages: jsonb("messages").notNull().default([]),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+/**
+ * A chat belongs to the browser session (vesta_sid cookie) that created it, the
+ * same way carts do, until real accounts exist. Rows with no session_id (created
+ * before this column) are not shown to anyone.
+ */
+export const chatHistories = pgTable(
+  "chat_histories",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").references(() => users.id),
+    sessionId: text("session_id"),
+    messages: jsonb("messages").notNull().default([]),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionIdx: index("chat_histories_session_idx").on(table.sessionId),
+  }),
+);
 
 export const insertChatHistorySchema = createInsertSchema(chatHistories).pick({
   userId: true,
+  sessionId: true,
   messages: true,
 });
 

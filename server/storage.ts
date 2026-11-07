@@ -16,7 +16,7 @@ import {
   type CartLine,
 } from "@shared/schema";
 import { db } from "./db";
-import { and, eq, ilike, or, isNull, sql, SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql, SQL } from "drizzle-orm";
 
 export interface CatalogQuery {
   audience?: string;
@@ -35,10 +35,11 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   ensureLocalUser(id?: number): Promise<User>;
 
-  getChatHistory(id: number): Promise<ChatHistory | undefined>;
-  getChatHistoriesByUserId(userId: number): Promise<ChatHistory[]>;
-  createChatHistory(chatHistory: InsertChatHistory): Promise<ChatHistory>;
-  updateChatHistory(id: number, messages: Message[]): Promise<ChatHistory | undefined>;
+  // CHANGED: every chat-history call is scoped to the browser session
+  getChatHistory(id: number, sessionId: string): Promise<ChatHistory | undefined>;
+  getChatHistoriesForSession(sessionId: string): Promise<ChatHistory[]>;
+  createChatHistory(chatHistory: InsertChatHistory & { sessionId: string }): Promise<ChatHistory>;
+  updateChatHistory(id: number, sessionId: string, messages: Message[]): Promise<ChatHistory | undefined>;
 
   listProducts(query?: CatalogQuery): Promise<Product[]>;
   countProducts(query?: CatalogQuery): Promise<number>;
@@ -133,22 +134,25 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getChatHistory(id: number): Promise<ChatHistory | undefined> {
+  async getChatHistory(id: number, sessionId: string): Promise<ChatHistory | undefined> {
     const [history] = await db
       .select()
       .from(chatHistories)
-      .where(eq(chatHistories.id, id));
+      .where(and(eq(chatHistories.id, id), eq(chatHistories.sessionId, sessionId)));
     return history || undefined;
   }
 
-  async getChatHistoriesByUserId(userId: number): Promise<ChatHistory[]> {
+  async getChatHistoriesForSession(sessionId: string): Promise<ChatHistory[]> {
     return await db
       .select()
       .from(chatHistories)
-      .where(or(eq(chatHistories.userId, userId), isNull(chatHistories.userId)));
+      .where(eq(chatHistories.sessionId, sessionId))
+      .orderBy(desc(chatHistories.updatedAt));
   }
 
-  async createChatHistory(chatHistory: InsertChatHistory): Promise<ChatHistory> {
+  async createChatHistory(
+    chatHistory: InsertChatHistory & { sessionId: string },
+  ): Promise<ChatHistory> {
     const [history] = await db
       .insert(chatHistories)
       .values(chatHistory)
@@ -158,6 +162,7 @@ export class DatabaseStorage implements IStorage {
 
   async updateChatHistory(
     id: number,
+    sessionId: string,
     messages: Message[]
   ): Promise<ChatHistory | undefined> {
     const [updatedHistory] = await db
@@ -166,7 +171,7 @@ export class DatabaseStorage implements IStorage {
         messages: messages,
         updatedAt: new Date(),
       })
-      .where(eq(chatHistories.id, id))
+      .where(and(eq(chatHistories.id, id), eq(chatHistories.sessionId, sessionId)))
       .returning();
 
     return updatedHistory || undefined;

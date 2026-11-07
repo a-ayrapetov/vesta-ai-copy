@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import { storage } from "../storage";
 import { closeDb } from "../db";
 import type { InsertProduct } from "@shared/schema";
+import { feedRowProblem } from "../services/catalogFeed";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,9 +71,13 @@ async function main() {
   }
 
   let upserted = 0;
+  let skipped = 0;
   for (const row of rows) {
-    if (!row.externalId || !row.merchant || !row.title || !row.imageUrl || !row.affiliateUrl) {
-      console.warn("Skipping incomplete row:", row);
+    // CHANGED: also refuses non-web buy and image links (see catalogFeed.ts)
+    const problem = feedRowProblem(row);
+    if (problem) {
+      console.warn(`Skipping row ${row.externalId ?? "(no id)"}: ${problem}`);
+      skipped += 1;
       continue;
     }
     await storage.upsertProduct(toInsert(row));
@@ -80,7 +85,7 @@ async function main() {
   }
 
   const total = await storage.countProducts({ activeOnly: true });
-  console.log(`✓ Upserted ${upserted} products. Active catalog size: ${total}`);
+  console.log(`✓ Upserted ${upserted} products, skipped ${skipped}. Active catalog size: ${total}`);
 }
 
 main()

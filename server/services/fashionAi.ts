@@ -4,6 +4,7 @@ import { generateLocalFashionResponse } from "./fashionData";
 import { trySmallTalkReply } from "./fashionSmallTalk";
 import { searchDeepFashionDetailed } from "./deepFashion";
 import { resolveOutfitSuggestions } from "./catalog";
+import { getClaudeModels } from "./claudeModels";
 import {
   FashionQueryPlan,
   buildRetrievalPlan,
@@ -285,11 +286,8 @@ export async function generateFashionResponse(
       messages.push({ role: "user", content: userMessage });
     }
 
-    const models = [
-      "claude-3-5-sonnet-20241022",
-      "claude-3-sonnet-20240229",
-      "claude-3-haiku-20240307",
-    ];
+    // CHANGED: the claude-3-* IDs were retired; see claudeModels.ts
+    const models = getClaudeModels();
     
     let response;
     let lastError;
