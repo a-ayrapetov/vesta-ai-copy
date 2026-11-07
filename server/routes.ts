@@ -6,8 +6,17 @@ import { messageSchema } from "@shared/schema";
 import { generateFashionResponse } from "./services/fashionAi";
 import { processVirtualTryOn } from "./services/virtualTryOn";
 import { getDeepFashionRecommendations, getDeepFashionOutfits } from "./services/deepFashion";
+import { chatRequestSchema } from "./validation";
+import { createRateLimiter } from "./middleware/rateLimit";
+import { isSafeHttpUrl } from "@shared/safeUrl";
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // ADDED: requests per minute per client IP on /api/chat. EDIT via CHAT_RATE_LIMIT_PER_MIN.
+  const chatLimiter = createRateLimiter({
+    windowMs: 60_000,
+    max: Number(process.env.CHAT_RATE_LIMIT_PER_MIN) || 20,
+  });
+
   // Health check for Docker / load balancers
   app.get('/api/health', async (_req, res) => {
     return res.json({
@@ -20,14 +29,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Chat endpoint
   app.post('/api/chat', async (req, res) => {
     try {
-      const requestSchema = z.object({
-        message: z.string(),
-        history: z.array(messageSchema).optional(),
-        imageData: z.string().optional() // Base64 encoded image
-      });
+      // CHANGED: size and type limits (validation.ts), then a per-IP throttle so
+      // only valid requests that would reach the paid Claude API are counted.
+      const validatedData = chatRequestSchema.parse(req.body);
 
-      const validatedData = requestSchema.parse(req.body);
-      
+      const limit = chatLimiter.hit(req.ip || 'unknown');
+      if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSec));
+        return res.status(429).json({
+          message: `You're sending messages quickly. Try again in ${limit.retryAfterSec} seconds.`,
+        });
+      }
+
       // Process the message with Claude (with or without image)
       const response = await generateFashionResponse(
         validatedData.message, 
@@ -39,7 +52,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error processing chat request:', error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: 'Invalid request data', errors: error.errors });
+        // CHANGED: lead with the plain reason (e.g. image too large) so the UI can show it
+        const reason = error.errors[0]?.message || 'Invalid request data';
+        return res.status(400).json({ message: reason, errors: error.errors });
       }
       return res.status(500).json({ message: 'Error processing your request' });
     }
@@ -58,6 +73,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const chatHistory = await storage.createChatHistory({
         userId: localUser.id,
+        sessionId: req.sessionId, // CHANGED: owned by this browser
         messages: validatedData.messages
       });
       
@@ -83,7 +99,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Invalid chat history ID' });
       }
       
-      const chatHistory = await storage.getChatHistory(historyId);
+      const chatHistory = await storage.getChatHistory(historyId, req.sessionId);
       
       if (!chatHistory) {
         return res.status(404).json({ message: 'Chat history not found' });
@@ -96,18 +112,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Get all chat histories for a user (userId 1 = local MVP user)
+  // Chat histories for this browser. CHANGED: :userId is kept for client
+  // compatibility but no longer selects whose chats are returned.
   app.get('/api/chat/histories/:userId', async (req, res) => {
     try {
       const userId = parseInt(req.params.userId);
-      
+
       if (isNaN(userId)) {
         return res.status(400).json({ message: 'Invalid user ID' });
       }
 
-      const localUser = await storage.ensureLocalUser();
-      const resolvedId = userId === 1 ? localUser.id : userId;
-      const chatHistories = await storage.getChatHistoriesByUserId(resolvedId);
+      const chatHistories = await storage.getChatHistoriesForSession(req.sessionId);
       
       return res.json(chatHistories);
     } catch (error) {
@@ -132,7 +147,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validatedData = requestSchema.parse(req.body);
       
       const updatedHistory = await storage.updateChatHistory(
-        historyId, 
+        historyId,
+        req.sessionId,
         validatedData.messages
       );
       
@@ -430,6 +446,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const product = await storage.getProductById(productId);
       if (!product) {
         return res.status(404).json({ message: 'Product not found' });
+      }
+
+      // ADDED: second check after ingest; never redirect to a non-web link
+      if (!isSafeHttpUrl(product.affiliateUrl)) {
+        console.error(`Refusing redirect for product ${product.id}: affiliateUrl is not http(s)`);
+        return res.status(422).json({ message: 'This product link is unavailable' });
       }
 
       const source = typeof req.query.source === 'string' ? req.query.source : 'unknown';

@@ -8,6 +8,8 @@ import {
   GarmentCategory,
 } from "../services/fashionIntent";
 import { searchDeepFashionDetailed } from "../services/deepFashion";
+import { existsSync } from "fs";
+import path from "path";
 
 type CaseResult = { name: string; ok: boolean; detail: string };
 
@@ -335,4 +337,22 @@ function run(): number {
   return failed;
 }
 
-process.exit(run());
+// ADDED: the image corpus is gitignored, so a fresh clone has none. Say so up front
+// instead of letting every image check fail with "n=0".
+const captionsPath = path.join(
+  process.env.DEEPFASHION_ROOT ||
+    path.join(process.cwd(), "server", "data", "DeepFashion-MultiModal"),
+  "captions.json",
+);
+const corpusPresent = existsSync(captionsPath);
+if (!corpusPresent) {
+  console.warn(
+    `WARNING: DeepFashion corpus not found at ${captionsPath}.\n` +
+      "Checks that count returned images will fail. Place the dataset there (see README step 8) for a real result.\n",
+  );
+}
+const failures = run();
+if (failures > 0 && !corpusPresent) {
+  console.warn(`${failures} failure(s) above are expected without the corpus; they do not show a logic bug.`);
+}
+process.exit(failures);

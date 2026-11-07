@@ -146,6 +146,15 @@ Restart `npm run dev`. Try-on UI calls **your** API `POST /api/virtual-try-on`, 
 
 ---
 
+## Tests
+
+```bash
+npm run check   # typecheck
+npm test        # unit tests + the real API against Postgres (run npm run db:push first)
+```
+
+CI runs both plus `eval:chat` on every push. Review notes and open items: [docs/REVIEW_2026-11-07.md](docs/REVIEW_2026-11-07.md).
+
 ## Conversation / prompt eval (manual)
 
 Do **not** run these on every boot. Use them after prompt or intent changes. They never call Claude.
